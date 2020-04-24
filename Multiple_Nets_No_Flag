@@ -1,0 +1,1077 @@
+// sl2pC - Simplified Level 2 Processor CCRS Version
+//
+/* GEE Javascript implementation of the CCRS Version
+ of the Simplified Level 2 Processor of Weiss and Baret (2014).
+
+ Input: Collection of either Landsat 5 or Landsat 7 or Landsat 8 
+        or Sentinel 2a or Sentinel 2b surface reflectance products.
+
+        Optional user provided land cover classified according to
+        legend provided in Fernandes 2019.
+
+ Output:Visualization layers of vegetation biophysical parameter layers 
+        correspond to one or more of:
+          Albedo: Black sky albedo at 10:30 local time.
+          D:      Directional canopy scattering factor.
+          fAPAR:  Fraction of absorbed photosynthetically active radiation, black sky at 10:30 local time.
+          fCover: Fraction of canopy cover.
+          LAI:    Leaf area index.
+          CCC:    Canopy chlorophyll content.
+          CWC:    Canopy water content.
+        Output GeoTiff granule with all selected product layers per image
+          in the input collection.                                        */
+
+// The namespace for our application.  All the state is kept in here.
+var app = {};
+
+// getcoef
+app.getcoefs = function(ind) {
+  return(app.netData.getNumber(ee.String('tabledata').cat(ee.Number(ind).int())));
+
+};
+
+// makes a SL2P network for selected variable
+var makeNets = function(feature, M) {
+  var feature = ee.List(feature);
+  var M = ee.Number(M);
+  
+ // app.netData = ee.Feature(feature.filter(ee.Filter.eq('tabledata4', M)).first());
+ app.netData = ee.Feature(feature.get(M.subtract(1)));
+  var net = {};
+
+  var num = ee.Number(6);
+  var start = num.add(1);
+  var end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.inpSlope = ee.List.sequence(start,end).map(app.getcoefs);
+
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.inpOffset = ee.List.sequence(start,end).map(app.getcoefs);
+
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.h1wt = ee.List.sequence(start,end).map(app.getcoefs);
+
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.h1bi = ee.List.sequence(start,end).map(app.getcoefs);
+
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.h2wt = (ee.List.sequence(start,end).map(app.getcoefs));
+  
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.h2bi = ee.List.sequence(start,end).map(app.getcoefs);
+
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.outSlope = ee.List.sequence(start,end).map(app.getcoefs);
+  
+  num = end.add(1);
+  start = num.add(1);
+  end = num.add(app.netData.getNumber(ee.String('tabledata').cat(ee.String(num))));
+  net.outBias = ee.List.sequence(start,end).map(app.getcoefs);
+
+  //net.Name = asset;
+  //net.Name= ee.Feature(app.NETWORK_OPTIONS.first().get(M));
+  
+  return(ee.Dictionary(net));
+};
+
+var makeNetVars = function(assetName, variableNum){
+   var asset= ee.FeatureCollection(assetName);
+   var variable= ee.Number(variableNum);
+   var landclass = ee.Number(ee.Feature(app.Network_Ind.first()).propertyNames().remove('system:index').remove('lon').size()).subtract(1);
+  // get selected network 
+  var list_features = asset.flatten();
+  var filtered_features = ee.FeatureCollection(asset.filter(ee.Filter.eq('tabledata3', variable))).toList(landclass);
+
+  //Features should be one feature from each class for that variable
+  var netList = ee.List.sequence(1,landclass).map(makeNets.bind(null,filtered_features));
+  var net = netList.add(ee.Feature(assetName.first()).id());
+  
+  return(net);
+};
+
+//  Creates the UI panels. 
+app.createPanels = function() {
+  // The introduction section. 
+  app.intro = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'LEAF Toolbox',
+        style: {fontWeight: 'bold', fontSize: '24px', margin: '10px 5px'}
+      }),
+      ui.Label('This app allows you to display and export maps of  ' +
+               'vegetation biophysical variables derived from the Sentinel 2 Multispectral Imager ' + 
+               'or Landsat 8 Operational Land Imager .')
+    ])
+  };
+
+
+  // The collection filter controls. 
+  app.filters = {
+    
+    // Create a select with a function that reacts to the "change" event.
+    selectCollection: ui.Select({
+      items: Object.keys(app.COLLECTION_OPTIONS),
+      onChange: function(value) {
+        app.collectionName = value;        
+
+        //print(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors);
+        app.SL2P = ee.List.sequence(1,app.COLLECTION_OPTIONS[value].numVariables).map(makeNetVars.bind(null,app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2P));
+        app.errorSL2P = ee.List.sequence(1,app.COLLECTION_OPTIONS[value].numVariables).map(makeNetVars.bind(null,app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors));
+        print(app.errorSL2P);
+        print(app.SL2P);
+      
+      }
+    }),
+    startDate: ui.DateSlider({start:  "2000-1-1", end: Date.now(), value: [Date.now()-1000*3600*24*30,Date.now()-1000*3600*24*30]}),
+    endDate: ui.DateSlider({start:  "2000-1-1", end: Date.now(), value: [Date.now(), Date.now()]}),
+    maxCloudcover: ui.Slider({min: 0,max: 100,step:10}).setValue(90),
+    selectGeometry: ui.Checkbox({
+      label: "Use geometry for ROI",
+      onChange: function() {
+        app.filters.mapBounds = ee.Geometry(Map.getBounds(true));
+      if (app.filters.selectGeometry.getValue() === true) {
+        app.filters.mapBounds = geometry;
+        Map.centerObject(geometry);
+      }
+      //app.refreshMapLayer;
+      }
+    }),
+    applyButton: ui.Button('Apply filters', app.applyFilters),
+    loadingLabel: ui.Label({
+      value: 'Loading...',
+      style: {stretch: 'vertical', color: 'gray', shown: false}
+    })
+  };
+
+  // Default the selectCollection to the first value.
+  app.filters.selectCollection.setValue(app.filters.selectCollection.items().get(0));
+
+  // Default bounds to current map bounds.
+  app.filters.mapBounds = ee.Geometry(Map.getBounds(true));
+  
+  // The panel for the filter control widgets.
+  app.filters.panel = ui.Panel({
+    widgets: [
+      ui.Label('1) Select filters', {fontWeight: 'bold'}),
+      ui.Label('Collection', app.HELPER_TEXT_STYLE), app.filters.selectCollection,
+      ui.Label('Start date', app.HELPER_TEXT_STYLE), app.filters.startDate,
+      ui.Label('End date', app.HELPER_TEXT_STYLE), app.filters.endDate,
+      ui.Label('Maximum cloud cover', app.HELPER_TEXT_STYLE), app.filters.maxCloudcover,
+      app.filters.selectGeometry,
+      ui.Panel([
+        app.filters.applyButton,
+        app.filters.loadingLabel
+      ], ui.Panel.Layout.flow('horizontal'))
+    ],
+    style: app.SECTION_STYLE
+  });
+
+  // The product picker section. 
+  app.picker = {
+    // Create a select with a function that reacts to the "change" event.
+    allImages: ui.Checkbox(
+      {label: 'Process all products', value: false,
+        onChange: app.refreshMapLayer
+      }),
+    select: ui.Select({
+      placeholder: 'Select product',
+      onChange: app.refreshMapLayer
+    })
+  };
+
+  // The panel for the picker section with corresponding widgets. 
+  app.picker.panel = ui.Panel({
+    widgets: [
+      ui.Label('2) Select products', {fontWeight: 'bold'}),
+      ui.Panel([
+        app.picker.select,
+        
+      ], ui.Panel.Layout.flow('horizontal')),
+      app.picker.allImages,
+      
+      
+    ],
+    style: app.SECTION_STYLE
+  });
+
+
+  // The visualization section. 
+  app.vis = {
+    label: ui.Label(),
+    // Create a select with a function that reacts to the "change" event.
+    select: ui.Select({
+      items: Object.keys(app.VIS_OPTIONS),
+      //items: Object.keys(app.COLLECTION_OPTIONS[app.filters.selectCollection.getValue()].VIS_OPTIONS),
+
+      onChange: function() {
+        // Update the label's value with the select's description.
+        var option = app.VIS_OPTIONS[app.vis.select.getValue()];
+        app.vis.label.setValue(option.description);
+        // Refresh the map layer.
+        app.refreshMapLayer();
+      }
+    })
+  }; 
+
+  // The panel for the visualisation section with corresponding widgets. 
+  app.vis.panel = ui.Panel({
+    widgets: [
+      ui.Label('3) Select a variable to display', {fontWeight: 'bold'}),
+      app.vis.select,
+      app.vis.label
+    ],
+    style: app.SECTION_STYLE
+  }); 
+  app.vis.select.setValue(app.vis.select.items().get(0));
+  
+
+  // The export section. 
+   app.export = {
+     label: ui.Label(),
+    // Create a select with a function that reacts to the "change" event.
+    select: ui.Select({
+      items: Object.keys(app.EXP_OPTIONS),
+      
+        // Update the label's value with the select's description.
+        onChange: function(value){
+      
+        app.exportID = value; 
+        } 
+    }),
+       textbox1: ui.Textbox({
+        placeholder:'Enter folder name',
+        
+        onChange: function(text){
+          app.folder = [''];
+          app.folder[0] =  app.export.textbox1.getValue();
+          print('Into Folder:', app.folder[0]);
+        }
+      }),
+        textbox2: ui.Textbox({
+        placeholder:'Enter Max Pixels',
+        
+        onChange: function(text){
+          app.pixels = [0];
+          app.pixels[0] = app.export.textbox2.getValue();
+          print('Max Pixels:', app.pixels[0]);
+        }
+      }),
+    exportButton: ui.Button({
+      label:'Apply Export',  
+      
+      onClick: function(){
+        
+        app.exportMapLayer();
+       }
+      })
+  };
+
+  // The panel for the export section with corresponding widgets. 
+  app.export.panel = ui.Panel({
+    widgets: [
+      ui.Label('4) Exporting Results to Drive', {fontWeight: 'bold'}),
+      app.export.select,
+      app.export.label,
+      app.export.textbox1,
+      app.export.textbox2,
+      app.export.exportButton
+    ],
+    style: app.SECTION_STYLE
+  });
+
+   app.export.select.setValue(app.export.select.items().get(0));
+};
+// Creates the app helper functions. 
+app.createHelpers = function() {
+  /**
+   * Enables or disables loading mode.
+   * @param {boolean} enabled Whether loading mode is enabled.
+   */
+  app.setLoadingMode = function(enabled) {
+    // Set the loading label visibility to the enabled mode.
+    app.filters.loadingLabel.style().set('shown', enabled);
+    // Set each of the widgets to the given enabled mode.
+    var loadDependentWidgets = [
+      app.vis.select,
+      app.filters.startDate,
+      app.filters.endDate,
+      app.filters.maxCloudcover,
+      app.filters.selectGeometry,
+      app.filters.applyButton,
+      app.export.exportButton
+    ];
+    loadDependentWidgets.forEach(function(widget) {
+      widget.setDisabled(enabled);
+    });
+  };
+};
+
+  // Applies the selection filters currently selected in the UI. 
+  app.applyFilters = function() {
+    app.setLoadingMode(true);
+
+    // Set filter variables.
+    var start = app.filters.startDate.getValue();
+    var end = app.filters.endDate.getValue();
+    //Change to only take the first in the collection for debugging
+ 
+    var filtered = ee.ImageCollection(app.filters.selectCollection.getValue())
+                    .filterBounds(app.filters.mapBounds)
+                    .filterDate(start[1], end[1])
+                    .filterMetadata((app.COLLECTION_OPTIONS[app.filters.selectCollection.getValue()]).Cloudcover,'less_than',app.filters.maxCloudcover.getValue())
+                    .filterMetadata((app.COLLECTION_OPTIONS[app.filters.selectCollection.getValue()]).Watercoverfilter)
+                    .limit(5000);
+
+    // Debug list filtered collection
+    print('The list filtered collection');
+    print(filtered);
+
+    // Get the list of computed ids.
+    var computedIds = filtered
+        .limit(app.IMAGE_COUNT_LIMIT)
+        .reduceColumns(ee.Reducer.toList(), ['system:index'])
+        .get('list');
+
+    computedIds.evaluate(function(ids) {
+      // Update the image picker with the given list of ids.
+      app.setLoadingMode(false);
+      app.picker.select.items().reset(ids);
+      // Default the image picker to the first id.
+      app.picker.select.setValue(app.picker.select.items().get(0));
+          // Disable the all images checbox
+    app.picker.allImages.setValue(false);
+    });
+  };
+
+// convert number to string for mapping onto list
+var toString = function(number) {
+  return(ee.String(number));
+};
+
+var makeCodeImage = function(bandlist, images){
+  var images = ee.Image(images);
+  var bandlist = ee.List(bandlist);
+  
+  var netOptions = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()];
+  var scale = netOptions.inpCode;
+  var inp = images.select(bandlist).multiply(0.001).round().multiply(0.1);
+    //modulus the values to round them?
+   var code= scale.multiply(ee.Image(inp.toArray())
+                                    .arrayProject([0])
+                                    .arrayFlatten([inp.bandNames()]))
+                     .reduce('sum').int8();
+                 
+ return(ee.Image([0]).addBands(code));
+};
+
+var InvalidInput = function(image){
+  //Initialize the domain and input image
+  var netOptions = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()];
+  var inp = ee.List(netOptions.inp);
+  var table = ee.Feature(ee.FeatureCollection(app.domainS2).first()).toDictionary();
+  
+  var getList = function(ind){
+    var num = table.getNumber(ee.String('Var').cat(ee.Number(ind).int()));
+  return(num);
+};
+  var netDomain = ee.List.sequence(1,table.size()).map(getList);
+  print(netDomain);
+                         
+ var codeBand = makeCodeImage(inp, image).remap(netDomain, ee.List.repeat(11, netDomain.length()),0,'sum');                   
+ var codeImage = image.addBands(codeBand);
+
+ return(codeImage);
+ //return(image.updateMask(codeBand));
+};
+
+
+var getClassColl = function(img, landclass){
+  var landclass = ee.Number(landclass);
+  var img = ee.Image(img);
+  
+  var class_col = {};
+  var code_layer = img.select('remapped');
+
+  var updated_image = img.updateMask(code_layer.eq(landclass));
+  //circle image through 
+    class_col.img = updated_image.select(ee.List(img.bandNames()).remove('remapped').remove('b1'));
+    class_col.ind = ee.Number(landclass).int();
+  
+  return (class_col);
+};
+
+var applyNet = function(netList,class_col) {
+  // Adds visualization band to collection
+  var class_col = ee.Dictionary(class_col);
+  var netList = ee.List(netList);
+  
+  var inp = ee.Image(class_col.get('img'));
+  var net = ee.Dictionary(netList.get(ee.Number(class_col.get(ee.String('ind')))));
+
+  // Input scaling
+  var l1inp2D = inp.multiply(ee.Image(net.toArray(ee.List(['inpSlope']),0).transpose())
+                                          .arrayProject([0])
+                                          .arrayFlatten([inp.bandNames()]))
+                   .add(ee.Image(net.toArray(ee.List(['inpOffset']),0).transpose())
+                                          .arrayProject([0])
+                                          .arrayFlatten([inp.bandNames()]));
+
+  // Hidden layers
+  var l12D = ee.Image(net.toArray(ee.List(['h1wt']),0).reshape([ee.List(net.get('h1bi')).length(),ee.List(net.get('inpOffset')).length()]))
+              .matrixMultiply(l1inp2D.toArray().toArray(1))
+              .add(ee.Image(net.toArray(ee.List(['h1bi']),0).transpose()))
+              .arrayProject([0]).arrayFlatten([['h1w1','h1w2','h1w3','h1w4','h1w5']]);
+
+  // apply tansig 2/(1+exp(-2*n))-1
+  var l2inp2D = ee.Image(2)
+                  .divide(ee.Image(1)
+                            .add((ee.Image(-2).multiply(l12D)).exp()))
+                            .subtract(ee.Image(1));
+                            
+  // purlin hidden layers
+  var l22D = l2inp2D.multiply(ee.Image(net.toArray(ee.List(['h2wt']),0).transpose())
+                                          .arrayProject([0])
+                                          .arrayFlatten([['h2w1','h2w2','h2w3','h2w4','h2w5']]))
+                    .reduce('sum')
+                    .add(ee.Image(net.toArray(ee.List(['h2bi']),0)))
+                                          .arrayProject([0])
+                                          .arrayFlatten([['h2bi']]);
+  
+  // Output scaling
+      var outputBand = l22D.subtract(ee.Image(ee.Number(net.get('outBias'))))
+                    .divide(ee.Image(ee.Number(net.get('outSlope'))))
+                    .rename(ee.String(netList.get(netList.size().subtract(1))));
+
+//Adds a 23rd variable band to every image in the collection
+  return (outputBand);
+};
+//returns image with remapped landclass indexes
+var make_indexLayer = function(image){
+var legend = ee.FeatureCollection(app.legend);
+var landcover_list = legend.toList(legend.size());
+  var landclass = landcover_list.map(function(feature){return ee.Feature(feature).get('SL2P Network');});
+  print(landclass);
+    var landcover= landcover_list.map(function(feature){return ee.Feature(feature).getNumber('1Value');});
+    print(landcover);
+      var landclass_re = landclass.map(function(property){return ee.Feature(app.Network_Ind.first()).toDictionary().getNumber(property);});
+       print(landclass_re);
+        var indexLayer = image.remap(landcover, landclass_re, 0, 'b1');
+
+return(image.addBands(indexLayer));
+};
+
+var wrapperNNets = function(network, filtered_col){
+   var landclass = ee.Number(ee.Feature(app.Network_Ind.first()).propertyNames().remove('system:index').remove('lon').size()).subtract(2);
+   var network = ee.List(network);
+    var filtered_col = ee.Image(filtered_col);
+    
+    var netOptions = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()];
+    var netList = ee.List(network.get(ee.Number(netOptions.variable).subtract(1))); 
+         
+          var inp = ee.Image([1])
+              .addBands((filtered_col.metadata(netOptions.sza)).multiply(3.1415).divide(180).cos()) 
+            .addBands((filtered_col.metadata(netOptions.saa)).multiply(3.1415).divide(180).cos()) 
+          .addBands(filtered_col.select(netOptions.inp).multiply(0.0001))
+        .addBands(app.landcover.mosaic().clip(filtered_col.geometry()));
+      
+      var landclass_inp = make_indexLayer(inp);
+
+    //print('landclass_inp');
+    //Map.addLayer(inp,{bands:'landclass'},'landclass_inp');
+    //Send the image to another function which takes the image bands from ranges and remaps to landclass
+    var class_list = ee.List.sequence(1, landclass).map(getClassColl.bind(null,landclass_inp));
+    var outputBand = ee.ImageCollection(class_list.map(applyNet.bind(null,netList))).max();
+
+  return (ee.Image(filtered_col).addBands(outputBand));
+};
+
+// sentinel 2 land mask
+var s2Mask = function(image) {
+  var mask = (image.select('SCL').eq(4)).or(image.select('SCL').eq(5));
+  return (image.updateMask(mask));
+};
+
+// landsat 8  land mask
+// clear and no water, cloud shadow, snow, clouds or terrain obstructuon
+var l08Mask = function(image) {
+  var qa = image.select('pixel_qa');
+  var mask = qa.bitwiseAnd(1).eq(0)
+                  .and(qa.bitwiseAnd(1<<2).eq(0))
+                  .and(qa.bitwiseAnd(1<<3).eq(0))
+                  .and(qa.bitwiseAnd(1<<4).eq(0))
+                  .and(qa.bitwiseAnd(1<<5).eq(0));
+  return (image.updateMask(mask));
+};
+
+  
+// Refreshes the current map layer based on the UI widget states. 
+app.exportMapLayer = function() {
+  // load cloud mask module
+  var mask  = require('users/fitoprincipe/geetools:cloud_masks');
+  var batch = require('users/fitoprincipe/geetools:batch');
+  
+  var netOptions = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()];
+  // subset collection to one image if required
+  // var filtered = ee.ImageCollection(ee.ImageCollection(app.filters.selectCollection.getValue()).first());
+  if (app.picker.allImages.getValue()) {
+    // filter collection for all products 
+    var start = app.filters.startDate.getValue();
+    var end = app.filters.endDate.getValue();
+    var filtered = ee.ImageCollection(app.filters.selectCollection.getValue())
+                    .filterBounds(app.filters.mapBounds)
+                    .filterDate(start[1], end[1])
+                    .filterMetadata((app.COLLECTION_OPTIONS[app.filters.selectCollection.getValue()]).Cloudcover,'less_than',app.filters.maxCloudcover.getValue());
+  }
+  else {
+    // process selected image only
+    var filtered = ee.ImageCollection(app.filters.selectCollection.getValue())
+                      .filter(ee.Filter.eq('system:index',app.picker.select.getValue()));
+  }
+  switch (app.filters.selectCollection.getValue()) {
+    //insert try catch statements 
+    case  'COPERNICUS/S2_SR':
+      var visCollection = filtered.map(InvalidInput)
+                                  .map(wrapperNNets.bind(null,app.SL2P))
+                                  .map(wrapperNNets.bind(null,app.errorSL2P))
+                                  .map(app.mask.sentinel2())
+                                  .map(s2Mask)
+                                  .select([ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2P.first()).id(), ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors.first()).id(),'remapped'] , [netOptions.Name , netOptions.errorName,'remapped']);
+      
+          break;
+    case  'LANDSAT/LC08/C01/T1_SR':
+          var visCollection  = filtered.map(InvalidInput)
+                                       .map(wrapperNNets.bind(null,app.SL2P))
+                                       .map(wrapperNNets.bind(null,app.errorSL2P))
+                                       .map(app.mask.landsatSR())
+                                       .map(l08Mask)
+                                       .select([ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2P.first()).id(), ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors.first()).id(),'remapped'] , [netOptions.Name , netOptions.errorName,'remapped']);
+             
+          break;
+    default: print('invalid collection for masking');
+          break;
+  }
+  
+  switch(app.exportID){
+    case 'Image by Image':
+      app.batch.Download.ImageCollection.toDrive(visCollection.limit(50), app.folder[0]);
+
+      break;
+    case 'Full Map Mosaic':
+        var export_image = visCollection.mosaic().toDouble();
+ 
+   Export.image.toDrive({
+     image: export_image,
+     description:'Mosaic_Export',
+     folder: app.folder[0],
+     maxPixels: app.pixels[0],
+     });
+  // export products
+  }
+};
+
+/** Refreshes the current map layer based on the UI widget states. */
+app.refreshMapLayer = function() {
+  // clear map
+  Map.clear();
+
+  // subset collection to one image if required
+  var netOptions = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()];
+  
+  //var filtered = ee.ImageCollection(ee.ImageCollection(app.filters.selectCollection.getValue()).first());
+  if (app.picker.select.getValue()) {
+  if (app.picker.allImages.getValue()) {
+    // filter collection for all products 
+    var start = app.filters.startDate.getValue();
+    var end = app.filters.endDate.getValue();
+    var filtered =  ee.ImageCollection(app.filters.selectCollection.getValue())
+                  .filterBounds(app.filters.mapBounds)
+                  .filterDate(start[1], end[1])
+                  .filterMetadata((app.COLLECTION_OPTIONS[app.filters.selectCollection.getValue()]).Cloudcover,'less_than',app.filters.maxCloudcover.getValue());
+  }
+  else {
+  // process selected image only
+    var filtered =  ee.ImageCollection(app.filters.selectCollection.getValue())
+                  .filter(ee.Filter.eq('system:index',app.picker.select.getValue()));
+  }
+  print('filtered collection refresh');
+  print(filtered);
+
+  switch (app.filters.selectCollection.getValue()) {
+    case  'COPERNICUS/S2_SR': 
+                      
+      var visCollection = filtered.map(InvalidInput)
+                                  .map(wrapperNNets.bind(null,app.SL2P))
+                                  .map(wrapperNNets.bind(null,app.errorSL2P))
+                                  .map(app.mask.sentinel2())
+                                  .map(s2Mask)
+                                  .select([ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2P.first()).id(), ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors.first()).id(),'remapped'] , [netOptions.Name , netOptions.errorName,'remapped']);
+      
+          break;
+          
+    case  'LANDSAT/LC08/C01/T1_SR':  // var visCollection  = ee.ImageCollection((addErrorBand(filtered.first())));  //addOutputBand(filtered.first());;
+          var visCollection  = filtered.map(InvalidInput)
+                                       .map(wrapperNNets.bind(null,app.SL2P))
+                                       .map(wrapperNNets.bind(null,app.errorSL2P))
+                                       .map(app.mask.landsatSR())
+                                       .map(l08Mask)
+                                       .select([ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2P.first()).id(), ee.Feature(app.COLLECTION_OPTIONS[app.collectionName].Collection_SL2Perrors.first()).id(),'remapped'] , [netOptions.Name , netOptions.errorName,'remapped']);
+           
+          break;
+    default: print('invalid collection for masking');
+          break;
+  }
+  // Display results
+  var visParams = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()]['outputParams'];
+  var errorParams = app.VIS_OPTIONS[app.vis.select.getValue()][app.filters.selectCollection.getValue()]['errorParams'];
+  //Outputs the Collection of filtered images with the vis parameters 
+       print('visCollection with vis parameters');
+       print(visCollection);
+
+    Map.addLayer(visCollection.mosaic().pow(1), visParams , netOptions.Name);
+    Map.addLayer(visCollection.mosaic().pow(1), errorParams , netOptions.errorName);
+    Map.addLayer(visCollection, {palette:['ffffff','000000'], bands:'remapped'},'Masked Layer');
+  }
+};
+//Importing the networks for each collection
+var l8_createFeatureCollection = function(){
+  var NNet_collections= ee.FeatureCollection('users/ccrs1fy2020/l8_sl2p_error/Global');
+  //merge more landclasses
+   return(NNet_collections);
+};
+
+var l8_createFeatureCollection_errors = function(){
+  var NNet_collections= ee.FeatureCollection('users/ccrs1fy2020/l8_sl2p_output/Global');
+  //merge more landclasses
+   return(NNet_collections);
+};
+
+var s2_createFeatureCollection = function(){
+  var NNet_collections= ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_weiss_or_prosail3_NNT3_Single_0_1_');
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/closed_cropland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_weiss_or_prosail3_NNT3_Single_0_1_'));
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/evergreen_needleaf_forest')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/grassland_pasture')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/lichen_feathermoss')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/polar_grassland'));
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/polar_shrubland'));
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/shrublands')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/sparse_cropland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_output/sphagnum_feathermoss')); 
+
+   return(NNet_collections);
+};
+
+var s2_createFeatureCollection_errors = function(){
+  var NNet_collections= ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_weiss_or_prosail3_NNT3_Single_0_1_error_up');
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/closed_cropland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_weiss_or_prosail3_NNT3_Single_0_1_error_up'));
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/evergreen_needleaf_forest')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/grassland_pasture')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/lichen_feathermoss')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/polar_grassland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/polar_shrubland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/shrubland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/sparse_cropland')); 
+    NNet_collections = NNet_collections.merge(ee.FeatureCollection('users/ccrs1fy2020/s2_sl2p_error/sphagnum_feathermoss')); 
+
+   return(NNet_collections);
+};
+
+// Creates the app constants. 
+app.createConstants = function() {
+  app.palettes = require('users/gena/packages:palettes');
+  app.Network_Ind = ee.FeatureCollection('users/hemitshah/Network_Ind_2');
+  app.landcover = ee.ImageCollection('users/hemitshah/CANADA_NALCMS_2015_tiles');
+  app.legend = ee.FeatureCollection('users/hemitshah/Landclass_Legend_4');
+  app.domainL7 = ee.FeatureCollection('users/rfernand387/LANDSAT_LC08_C01_T1_SR_DOMAIN');
+  app.domainS2 = ee.FeatureCollection('users/rfernand387/COPERNICUS_S2_SR_DOMAIN');
+  
+    // load cloud mask module
+  app.mask  = require('users/fitoprincipe/geetools:cloud_masks');
+  app.batch = require('users/fitoprincipe/geetools:batch');
+  app.NOW = Date.Now;
+  app.COLLECTION_ID = 'COPERNICUS/S2';
+  app.SECTION_STYLE = {margin: '20px 0 0 0'};
+  app.HELPER_TEXT_STYLE = {
+      margin: '8px 0 -3px 8px',
+      fontSize: '12px',
+      color: 'gray'
+  };
+  app.IMAGE_COUNT_LIMIT = 100;
+   app.EXP_OPTIONS = {'Image by Image':{Order :1},
+                     'Full Map Mosaic':{Order: 2}};
+  app.COLLECTION_OPTIONS = {
+    'COPERNICUS/S2_SR': {
+      name: 'S2',
+      description: 'Sentinel 2A',
+      visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B7', 'B6', 'B4']},
+      Cloudcover: 'CLOUDY_PIXEL_PERCENTAGE',
+      Watercoverfilter: {name: 'WATER_PERCENTAGE' , operator: 'less_than', value:100},
+      VIS_OPTIONS: app.VIS_OPTIONS,
+      Collection_SL2P: ee.FeatureCollection(s2_createFeatureCollection()),
+      Collection_SL2Perrors: ee.FeatureCollection(s2_createFeatureCollection_errors()),  
+      sl2pDomainAssetName: 'users/rfernand387/COPERNICUS_S2_SR_DOMAIN',
+      numVariables: 6,
+
+    },
+    'LANDSAT/LC08/C01/T1_SR': {
+      name: 'L8',
+      description: 'LANDSAT 8',
+      visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B4', 'B3', 'B2']},
+      Cloudcover: 'CLOUD_COVER_LAND',
+      Watercoverfilter: {name: 'CLOUD_COVER_LAND' , operator: 'greater_than', value:-1},
+      VIS_OPTIONS: app.VIS_OPTIONS2,
+      Collection_SL2P: ee.FeatureCollection(l8_createFeatureCollection()),
+      Collection_SL2Perrors: ee.FeatureCollection(l8_createFeatureCollection_errors()),
+      sl2pDomainAssetName: 'users/rfernand387/LANDSAT_LC08_C01_T1_SR_DOMAIN',
+      numVariables: 6,
+    },
+  
+  }; 
+  app.ALG_OPTIONS = {
+    'SL2P': {
+      name: 'SL2P',
+      description: 'Simplified Level 2 Processor',
+      numVariables: 6,
+    },
+    'SL2P-D': {
+      name: 'SL2P-D',
+      description: 'Simplified Level 2 Processor - Distributed',
+      numVariables: 6,
+    },
+  };
+      app.VIS_OPTIONS = {
+    'Albedo': {
+      'COPERNICUS/S2_SR': {
+        Name: 'Albedo',
+        errorName: 'errorAlbedo',
+        maskName: 'maskAlbedo',
+        description: 'Black sky albedo',
+        variable: 6,
+        outputParams: { min: 0.1, max: 0.3, palette: app.palettes.misc.jet[7], bands: ['Albedo']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorAlbedo']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]])))
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'Albedo',
+        errorName: 'errorAlbedo',
+        maskName: 'maskAlbedo',
+        description: 'Black sky albedo',
+        variable: 6,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['Albedo']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorAlbedo']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]])))
+      },
+    },
+    'fAPAR': {
+      'COPERNICUS/S2_SR': {
+        Name: 'fAPAR',
+        errorName: 'errorfAPAR',
+        maskName: 'maskfAPAR',
+        description: 'Fraction of absorbed photosynthetically active radiation',
+        variable: 2,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['fAPAR']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorfAPAR']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]])))
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'fAPAR',
+        errorName: 'errorfAPAR',
+        maskName: 'maskfAPAR',
+        description: 'Fraction of absorbed photosynthetically active radiation',
+        variable: 2,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['fAPAR']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorfAPAR']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]]))) 
+      },    
+    },
+    'fCOVER': {
+      'COPERNICUS/S2_SR': {
+        Name: 'fCOVER',
+        errorName: 'errorfCOVER',
+        maskName: 'maskfCOVER',
+        description: 'Fraction of canopy cover',
+        variable: 3,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['fCOVER']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorfCOVER']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]]))) 
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'fCOVER',
+        errorName: 'errorfCOVER',
+        maskName: 'maskfCOVER',
+        description: 'Fraction of canopy cover',
+        variable: 3,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['fCOVER']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorfCOVER']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]])))
+      },    
+    },
+    'LAI': {
+      'COPERNICUS/S2_SR': {
+        Name: 'LAI',
+        errorName: 'errorLAI',
+        maskName: 'maskLAI',
+        description: 'Leaf area index',
+        variable: 1,
+        outputParams: { min: 0, max: 10, palette: app.palettes.misc.jet[7], bands: ['LAI']},
+        errorParams: { min: -5, max: 5, palette: app.palettes.misc.jet[7], bands: ['errorLAI']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1]]))) 
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'LAI',
+        errorName: 'errorLAI',
+        maskName: 'maskLAI',
+        description: 'Leaf area index',
+        variable: 1,
+        outputParams: { min: 0, max: 10, palette: app.palettes.misc.jet[7], bands: ['LAI']},
+        errorParams: { min: -5, max: 5, palette: app.palettes.misc.jet[7], bands: ['errorLAI']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[10]])))
+      },    
+    },
+    'CCC': {
+      'COPERNICUS/S2_SR': {
+        Name: 'CCC',
+        errorName: 'errorCCC',
+        maskName: 'maskCCC',
+        description: 'Canopy chloropyll content',
+        variable: 4,
+        outputParams: { min: 0, max: 1000, palette: app.palettes.misc.jet[7], bands: ['CCC']},
+        errorParams: { min: -500, max: 500, palette: app.palettes.misc.jet[7], bands: ['errorCCC']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1000]])))
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'CCC',
+        errorName: 'errorCCC',
+        maskName: 'maskCCC',
+        description: 'Canopy chloropyll content',
+        variable: 4,
+        outputParams: { min: 0, max: 1000, palette: app.palettes.misc.jet[7], bands: ['CCC']},
+        errorParams: { min: -500, max: 500, palette: app.palettes.misc.jet[7], bands: ['errorCCC']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[1000]])))
+      },    
+    },
+     'CWC': {
+       'COPERNICUS/S2_SR': {
+        Name: 'CWC',
+        errorName: 'errorCWC',
+        maskName: 'maskCWC',
+        description: 'Canopy water content',
+        variable: 5,
+        outputParams: { min: 0, max: 100, palette: app.palettes.misc.jet[7], bands: ['CWC']},
+        errorParams: { min: -50, max: 50, palette: app.palettes.misc.jet[7], bands: ['errorCWC']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[100]])))
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'CWC',
+        errorName: 'errorCWC',
+        maskName: 'maskCWC',
+        description: 'Canopy water content',
+        variable: 5,
+        outputParams: { min: 0, max: 100, palette: app.palettes.misc.jet[7], bands: ['CWC']},
+        errorParams: { min: -50, max: 50, palette: app.palettes.misc.jet[7], bands: ['errorCWC']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[100]]))) 
+      },    
+    },
+      'DASF' : {
+      'COPERNICUS/S2_SR': {
+        name: 'DASF',
+        errorname: 'errorDASF',
+        maskname: 'maskDASF',
+        description: 'Canopy directional scattering factor',
+        variable: 7,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['DASF']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorDASF']},
+        sza: 'MEAN_SOLAR_ZENITH_ANGLE',
+        vza: 'MEAN_INCIDENCE_ZENITH_ANGLE_B8A',
+        saa: 'MEAN_SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'MEAN_INCIDENCE_AZIMUTH_ANGLE_B8A',
+        inp:      [ 'B4', 'B5', 'B6', 'B7', 'B8A','B9','B11','B12'],
+        inpMaskoff: ee.Image([0.3996,0.9163,0.2233,-0.238,-0.3674,-0.3685,-0.8071,0.3063]),
+        inpMaskslp:  ee.Image([36.6224,30.8043,29.8922,17.3294,13.6323,12.8205,19.7963,19.4766]),
+        inpCode:  ee.Image([10,100,1000,10000,100000,1000000,10000000,100000000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[2]])))
+      },
+      'LANDSAT/LC08/C01/T1_SR': {
+        Name: 'DASF',
+        errorName: 'errorDASF',
+        maskName: 'maskDASF',
+        description: 'Canopy directional scattering factor',
+        variable: 7,
+        outputParams: { min: 0, max: 1, palette: app.palettes.misc.jet[7], bands: ['DASF']},
+        errorParams: { min: -1, max: 1, palette: app.palettes.misc.jet[7], bands: ['errorDASF']},
+        sza: 'SOLAR_ZENITH_ANGLE',
+        vza: 'SOLAR_ZENITH_ANGLE',
+        saa: 'SOLAR_AZIMUTH_ANGLE', 
+        vaa: 'SOLAR_AZIMUTH_ANGLE',
+        inp:      ['B3', 'B4', 'B5', 'B6', 'B7'],
+        inpMaskoff: ee.Image([-0.0027,0.0688,-0.3097,-0.7127,0.2235]),
+        inpMaskslp:  ee.Image([36.1440,32.1918,14.7648,20.3312,19.7666]),
+        inpCode:  ee.Image([10,100,1000,10000,100000]),
+        outmin: (ee.Image(ee.Array([[0]]))),
+        outmax: (ee.Image(ee.Array([[2]])))
+      },    
+    },
+    };
+
+
+
+
+  
+};
+
+
+/** Creates the application interface. */
+app.boot = function() {
+  app.createConstants();
+  app.createHelpers();
+  app.createPanels();
+  var main = ui.Panel({
+    widgets: [
+      app.intro.panel,
+      app.filters.panel,
+      app.picker.panel,
+      app.vis.panel,
+      app.export.panel
+    ],
+    style: {width: '320px', padding: '8px'}
+  });
+  //Map.setCenter(-97, 26, 9);
+  ui.root.insert(0, main);
+};
+
+
+app.boot();
+
+// Function to mask clouds using the Sentinel-2 QA band.
+// cloud function to remove clouds. Through https://mygeoblog.com/2016/10/26/sentinel-1-2-for-high-resolution-landuse-mapping/
+var maskClouds = function(image){
+  //use add the cloud likelihood band to the image
+  var quality = image.select("QA60").unmask();
+  //get pixels above the threshold
+  var cloud01 = quality.gt(0);
+  //create a mask from high likelihood pixels
+  var cloudmask = image.mask().and(cloud01.not());
+  //mask those pixels from the image
+  return image.updateMask(cloudmask);
+};
